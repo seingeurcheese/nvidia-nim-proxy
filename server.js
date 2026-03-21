@@ -1,4 +1,4 @@
-// server.js - OpenAI to NVIDIA NIM Proxy (Hybrid Mode: Fast vs Thinking)
+// server.js - OpenAI to NVIDIA NIM Proxy (GLM-5 & Hybrid Optimized)
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -8,17 +8,13 @@ const http = require('http');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 🚀 SPEED BOOST: Keeps the connection to NVIDIA "warm"
 const axiosInstance = axios.create({
   httpAgent: new http.Agent({ keepAlive: true }),
   httpsAgent: new https.Agent({ keepAlive: true }),
 });
 
-// 🛠️ PATH FIX: Catch Janitor's double-path
 app.use((req, res, next) => {
-    if (req.url.includes('chat/completions')) {
-        req.url = '/v1/chat/completions';
-    }
+    if (req.url.includes('chat/completions')) req.url = '/v1/chat/completions';
     next();
 });
 
@@ -28,15 +24,16 @@ app.use(express.json({ limit: '100mb' }));
 const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
 const NIM_API_KEY = process.env.NIM_API_KEY;
 
-// 🎯 DUAL-MODE MAPPING
+// 🎯 UPDATED MODEL MAPPING (GLM-5 INTEGRATED)
 const MODEL_MAPPING = {
-  'gpt-4': 'z-ai/glm4.7',     // ⚡ FAST MODE (No Thinking)
-  'gpt-4o': 'z-ai/glm4.7',    // 🧠 THINKING MODE (Deep Reasoning)
-  'glm': 'z-ai/glm4.7',
+  'gpt-4': 'z-ai/glm4.7',           // ⚡ Fast GLM-4.7
+  'gpt-4o': 'z-ai/glm4.7',          // 🧠 Thinking GLM-4.7
+  'gpt-4-turbo': 'z-ai/glm5',      // ⚡ Fast GLM-5 (New!)
+  'gpt-4-reasoning': 'z-ai/glm5',  // 🧠 Thinking GLM-5 (New!)
   'llama-70b': 'meta/llama-3.1-70b-instruct'
 };
 
-const RP_GUARD = `You are ONLY the character described. No user dialogue. Stop when your turn ends.`;
+const RP_GUARD = `You are ONLY Satoru Gojo or the character described. No user dialogue. Stop when your turn ends.`;
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
@@ -47,8 +44,8 @@ app.post('/v1/chat/completions', async (req, res) => {
     const { model, messages, temperature, max_tokens, stream } = req.body;
     let nimModel = MODEL_MAPPING[model] || 'z-ai/glm4.7';
 
-    // 🧠 LOGIC: Force thinking ONLY if user picks gpt-4o
-    const shouldThink = (model === 'gpt-4o');
+    // 🧠 LOGIC: Enable thinking for "o" or "reasoning" versions
+    const shouldThink = model.includes('4o') || model.includes('reasoning');
 
     const systemIndex = messages.findIndex(m => m.role === 'system');
     if (systemIndex !== -1) {
@@ -63,11 +60,10 @@ app.post('/v1/chat/completions', async (req, res) => {
       temperature: temperature || 0.7,
       max_tokens: max_tokens || 4096,
       stream: stream || false,
-      // 🚀 Control reasoning based on the model chosen
       include_reasoning: shouldThink 
     };
 
-    // Extra flag specifically for GLM-4.7 thinking
+    // Support thinking for both GLM-4.7 and GLM-5
     if (shouldThink && nimModel.includes('glm')) {
       nimRequest.extra_body = { thinking: true };
     }

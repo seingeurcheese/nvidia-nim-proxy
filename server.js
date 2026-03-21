@@ -29,8 +29,8 @@ const NIM_API_KEY = process.env.NIM_API_KEY;
 const MODEL_MAPPING = {
   'gpt-4': 'z-ai/glm4.7',           // ⚡ Fast Mode
   'gpt-4o': 'z-ai/glm4.7',          // 🧠 Thinking Mode
-  'gpt-4-turbo': 'z-ai/glm-5',      // ⚡ Fast Mode (GLM-5)
-  'gpt-4-reasoning': 'z-ai/glm-5',  // 🧠 Thinking Mode (GLM-5)
+  'gpt-4-turbo': 'z-ai/glm5',      // ⚡ Fast Mode (GLM-5)
+  'gpt-4-reasoning': 'z-ai/glm5',  // 🧠 Thinking Mode (GLM-5)
   'llama-70b': 'meta/llama-3.1-70b-instruct'
 };
 

@@ -1,4 +1,3 @@
-// server.js - OpenAI to NVIDIA NIM API Proxy (Optimized for Janitor AI)
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -6,461 +5,56 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
+// FIX: This solves the "Endpoint not found" error in your screenshot
+app.use((req, res, next) => {
+    if (req.url.includes('/chat/completions/chat/completions')) {
+        req.url = req.url.replace('/chat/completions/chat/completions', '/chat/completions');
+    }
+    next();
+});
+
 app.use(cors());
-app.use(express.json({ limit: '100mb' }));
-app.use(express.urlencoded({ limit: '100mb', extended: true }));
+app.use(express.json());
 
-// NVIDIA NIM API configuration
-const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
-const NIM_API_KEY = process.env.NIM_API_KEY;
+const NIM_API_BASE = 'https://integrate.api.nvidia.com/v1';
+const NIM_API_KEY = process.env.NIM_API_KEY; // SET THIS IN RENDER DASHBOARD
 
-// 🔥 REASONING DISPLAY TOGGLE - Shows/hides reasoning in output
-const SHOW_REASONING = process.env.SHOW_REASONING === 'true' || false;
-
-// 🔥 THINKING MODE TOGGLE - Enables thinking for specific models that support it
-const ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE === 'true' || false;
-
-// 🎯 OPTIMIZED MODEL MAPPING FOR JANITOR AI
-// Best models from NVIDIA NIM API
-const MODEL_MAPPING = {
-  // Premium Reasoning Models (Best for Roleplay & Complex Conversations)
-  'gpt-4': 'z-ai/glm4.7',                                      // State-of-the-art reasoning LLM
-  'gpt-4-turbo': 'z-ai/glm4.7',                                // Hybrid thinking mode
-  'gpt-4o': 'z-ai/glm4.7',                                     // Improved stability & agent behavior
-  'claude-opus': 'nvidia/llama-3.1-nemotron-ultra-253b-v1',    // Highest accuracy, complex reasoning
-  'claude-sonnet': 'nvidia/llama-3.3-nemotron-super-49b-v1.5', // Great accuracy-efficiency balance
-  
-  // Fast & Efficient Models (Balanced Performance)
-  'gpt-3.5-turbo': 'nvidia/llama-3.1-nemotron-nano-8b-v1',     // Fast, efficient, good quality
-  'gpt-3.5-turbo-16k': 'nvidia/nvidia-nemotron-nano-9b-v2',    // Hybrid Mamba-Transformer, 128K context
-  'claude-haiku': 'nvidia/nemotron-3-nano-30b-a3b',            // Best-in-class throughput, 1M tokens
-  
-  // Specialized Models
-  'gemini-pro': 'qwen/qwen3-next-80b-a3b-thinking',            // Hybrid attention, ultra-long context
-  'gemini-pro-vision': 'nvidia/nemotron-nano-12b-v2-vl',       // Multi-image, video understanding
-  
-  // Alternative Premium Options
-  'gpt-4-reasoning': 'moonshotai/kimi-k2-instruct-1113',       // Long context, enhanced reasoning
-  'glm': 'z-ai/glm4.7',                                        // Direct GLM access
-  
-  // Fallback Models (Meta Llama)
-  'llama-70b': 'meta/llama-3.1-70b-instruct',
-  'llama-405b': 'meta/llama-3.1-405b-instruct',
-  'llama-8b': 'meta/llama-3.1-8b-instruct'
+// The exact model IDs NVIDIA expects
+const MODELS = {
+    'gpt-4': 'z-ai/glm-4-9b-chat',
+    'gpt-4o': 'z-ai/glm-4-9b-chat',
+    'gpt-3.5-turbo': 'nvidia/llama-3.1-nemotron-nano-8b-v1'
 };
 
-// 🛡️ ROLEPLAY GUARD - Injected into every request to prevent the model from speaking as the user
-const RP_GUARD_INSTRUCTION = `You are ONLY the character described in the system prompt or conversation. Follow these rules strictly:
-- You ONLY speak, act, and think as the character. You do NEVER write or generate any dialogue, actions, or thoughts for the user or any other character that the user is playing.
-- Do NOT use labels like "User:", "Human:", "You:" or any prefix to simulate the user's side of the conversation.
-- Do NOT continue the conversation by inventing what the user says or does next.
-- Stop your response immediately after your character's turn ends.
-- If you feel the scene needs a reaction from the user, end your response and wait.`;
+app.get('/health', (req, res) => res.send("Proxy is Online"));
 
-// 🛡️ ROLEPLAY GUARD - Strips any text where the model broke character and started writing as the user
-function stripUserBreakout(text) {
-  const lines = text.split('\n');
-  const cleaned = [];
-  let dropping = false;
-
-  // Patterns that signal the model started writing the user's side
-  const userLabels = [
-    /^(User|Human|You|Me|Player)\s*[:：]/i,
-    /^---+\s*$/,
-    /^\*{0,3}\s*(User|Human|You|Me|Player)\s*\*{0,3}\s*[:：]/i
-  ];
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-
-    // Hit a user-label line → start dropping everything after it
-    if (userLabels.some(pattern => pattern.test(trimmed))) {
-      dropping = true;
-      continue;
-    }
-
-    if (dropping) {
-      // Blank lines while dropping → skip
-      if (trimmed === '') continue;
-      // Asterisk = character action resumes, stop dropping
-      if (trimmed.startsWith('*')) {
-        dropping = false;
-        cleaned.push(line);
-      }
-      // Otherwise still dropping invented user dialogue
-      continue;
-    }
-
-    cleaned.push(line);
-  }
-
-  // Final safety net: cut off everything after the last user label
-  // in case one slipped through at the very end
-  const result = cleaned.join('\n');
-  const lastUserLabel = result.search(/\n(?:User|Human|You|Me|Player)\s*[:：]/i);
-  if (lastUserLabel !== -1) {
-    return result.substring(0, lastUserLabel).trimEnd();
-  }
-
-  return result.trimEnd();
-}
-
-// 🎨 THINKING-CAPABLE MODELS (for reasoning mode)
-const THINKING_MODELS = [
-  'z-ai/glm4.7',
-  'qwen/qwen3-next-80b-a3b-thinking',
-  'nvidia/llama-3.1-nemotron-ultra-253b-v1',
-  'nvidia/llama-3.3-nemotron-super-49b-v1.5',
-  'nvidia/llama-3.1-nemotron-nano-8b-v1',
-  'nvidia/nvidia-nemotron-nano-9b-v2',
-  'nvidia/nemotron-3-nano-30b-a3b'
-];
-
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    service: 'OpenAI to NVIDIA NIM Proxy (Janitor AI Optimized)', 
-    reasoning_display: SHOW_REASONING,
-    thinking_mode: ENABLE_THINKING_MODE,
-    nim_api_configured: !!NIM_API_KEY,
-    available_models: Object.keys(MODEL_MAPPING).length,
-    optimized_for: 'Janitor AI'
-  });
-});
-
-// Root endpoint
-app.get('/', (req, res) => {
-  res.json({
-    service: 'OpenAI to NVIDIA NIM Proxy',
-    version: '2.0',
-    optimized_for: 'Janitor AI',
-    status: 'running',
-    endpoints: {
-      health: '/health',
-      models: '/v1/models',
-      chat: '/v1/chat/completions'
-    },
-    featured_models: {
-      best_quality: 'gpt-4 → GLM-4.7',
-      balanced: 'claude-sonnet → llama-3.3-nemotron-super (49B)',
-      fastest: 'gpt-3.5-turbo → llama-3.1-nemotron-nano (8B)'
-    }
-  });
-});
-
-// List models endpoint (OpenAI compatible)
-app.get('/v1/models', (req, res) => {
-  const models = Object.keys(MODEL_MAPPING).map(model => ({
-    id: model,
-    object: 'model',
-    created: Date.now(),
-    owned_by: 'nvidia-nim-proxy',
-    nim_model: MODEL_MAPPING[model],
-    supports_thinking: THINKING_MODELS.includes(MODEL_MAPPING[model])
-  }));
-  
-  res.json({
-    object: 'list',
-    data: models
-  });
-});
-
-// Chat completions endpoint (main proxy)
 app.post('/v1/chat/completions', async (req, res) => {
-  try {
-    // Check API key
-    if (!NIM_API_KEY) {
-      return res.status(500).json({
-        error: {
-          message: 'NIM_API_KEY not configured. Please add your NVIDIA API key in Render environment variables.',
-          type: 'configuration_error',
-          code: 500
-        }
-      });
-    }
-
-    const { model, messages, temperature, max_tokens, stream } = req.body;
-    
-    // Smart model selection with fallback
-    let nimModel = MODEL_MAPPING[model];
-    
-    // If exact model not found, try intelligent fallback
-    if (!nimModel) {
-      try {
-        // Test if the requested model exists directly on NVIDIA NIM
-        await axios.post(`${NIM_API_BASE}/chat/completions`, {
-          model: model,
-          messages: [{ role: 'user', content: 'test' }],
-          max_tokens: 1
+    try {
+        const { model, messages, temperature, stream } = req.body;
+        
+        const response = await axios.post(`${NIM_API_BASE}/chat/completions`, {
+            model: MODELS[model] || 'z-ai/glm-4-9b-chat',
+            messages: messages,
+            temperature: temperature || 0.7,
+            stream: stream || false
         }, {
-          headers: { 
-            'Authorization': `Bearer ${NIM_API_KEY}`, 
-            'Content-Type': 'application/json' 
-          },
-          validateStatus: (status) => status < 500
-        }).then(res => {
-          if (res.status >= 200 && res.status < 300) {
-            nimModel = model;
-          }
-        });
-      } catch (e) {
-        // Will use fallback below
-      }
-      
-      // Intelligent fallback based on model name patterns
-      if (!nimModel) {
-        const modelLower = model.toLowerCase();
-        
-        // Match patterns for best model selection
-        if (modelLower.includes('gpt-4') || modelLower.includes('opus')) {
-          nimModel = 'z-ai/glm4.7'; // Best quality
-        } else if (modelLower.includes('glm') || modelLower.includes('z-ai')) {
-          nimModel = 'z-ai/glm4.7';
-        } else if (modelLower.includes('claude-sonnet') || modelLower.includes('70b')) {
-          nimModel = 'nvidia/llama-3.3-nemotron-super-49b-v1.5'; // Balanced
-        } else if (modelLower.includes('3.5') || modelLower.includes('haiku') || modelLower.includes('fast')) {
-          nimModel = 'nvidia/llama-3.1-nemotron-nano-8b-v1'; // Fast
-        } else if (modelLower.includes('gemini') || modelLower.includes('qwen')) {
-          nimModel = 'qwen/qwen3-next-80b-a3b-thinking';
-        } else {
-          // Default to balanced model for Janitor AI
-          nimModel = 'nvidia/llama-3.3-nemotron-super-49b-v1.5';
-        }
-      }
-    }
-    
-    // 🛡️ ROLEPLAY GUARD - Inject character-only instruction into the system prompt.
-    const systemIndex = messages.findIndex(m => m.role === 'system');
-    if (systemIndex !== -1) {
-      messages[systemIndex] = {
-        ...messages[systemIndex],
-        content: messages[systemIndex].content + '\n\n' + RP_GUARD_INSTRUCTION
-      };
-    } else {
-      messages.unshift({ role: 'system', content: RP_GUARD_INSTRUCTION });
-    }
-
-    // Transform OpenAI request to NIM format
-    const nimRequest = {
-      model: nimModel,
-      messages: messages,
-      temperature: temperature || 0.7, // Optimized for roleplay
-      max_tokens: max_tokens || 4096,  // Good balance for conversations
-      stream: stream || false
-    };
-
-    // Add thinking mode if enabled and model supports it
-    if (ENABLE_THINKING_MODE && THINKING_MODELS.includes(nimModel)) {
-      // For GLM models, check if they use the same 'thinking' parameter
-      if (nimModel.includes('glm')) {
-        nimRequest.extra_body = { thinking: true };
-      } 
-      // For Nemotron models, add system instruction
-      else if (nimModel.includes('nemotron')) {
-        if (nimRequest.messages[0]?.role !== 'system') {
-          nimRequest.messages.unshift({
-            role: 'system',
-            content: 'detailed thinking on'
-          });
-        }
-      }
-    }
-    
-    // Make request to NVIDIA NIM API
-    const response = await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
-      headers: {
-        'Authorization': `Bearer ${NIM_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      responseType: stream ? 'stream' : 'json'
-    });
-    
-    if (stream) {
-      // Handle streaming response with reasoning
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      
-      let buffer = '';
-      let reasoningStarted = false;
-      let contentAccumulator = '';
-      let flushedUpTo = 0;
-      const LOOKAHEAD = 200;
-      
-      response.data.on('data', (chunk) => {
-        buffer += chunk.toString();
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        
-        lines.forEach(line => {
-          if (line.startsWith('data: ')) {
-            if (line.includes('[DONE]')) {
-              // Flush any remaining content through the filter before sending DONE
-              if (contentAccumulator.length > flushedUpTo) {
-                const remaining = stripUserBreakout(contentAccumulator.substring(flushedUpTo));
-                if (remaining.length > 0) {
-                  const doneFlush = {
-                    choices: [{ delta: { content: remaining }, index: 0 }]
-                  };
-                  res.write(`data: ${JSON.stringify(doneFlush)}\n\n`);
-                }
-              }
-              res.write(line + '\n\n');
-              return;
-            }
-            
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (data.choices?.[0]?.delta) {
-                const reasoning = data.choices[0].delta.reasoning_content;
-                const content = data.choices[0].delta.content;
-                
-                if (SHOW_REASONING) {
-                  let combinedContent = '';
-                  
-                  if (reasoning && !reasoningStarted) {
-                    combinedContent = '<think>\n' + reasoning;
-                    reasoningStarted = true;
-                  } else if (reasoning) {
-                    combinedContent = reasoning;
-                  }
-                  
-                  if (content && reasoningStarted) {
-                    combinedContent += '\n</think>\n\n' + content;
-                    reasoningStarted = false;
-                  } else if (content) {
-                    combinedContent += content;
-                  }
-                  
-                  if (combinedContent) {
-                    data.choices[0].delta.content = combinedContent;
-                    delete data.choices[0].delta.reasoning_content;
-                  }
-                } else {
-                  if (content) {
-                    data.choices[0].delta.content = content;
-                  } else {
-                    data.choices[0].delta.content = '';
-                  }
-                  delete data.choices[0].delta.reasoning_content;
-                }
-
-                // 🛡️ Feed into accumulator and only flush the safe portion
-                const chunkText = data.choices[0].delta.content || '';
-                if (chunkText) {
-                  contentAccumulator += chunkText;
-                  const filtered = stripUserBreakout(contentAccumulator);
-                  const safeEnd = Math.max(flushedUpTo, filtered.length - LOOKAHEAD);
-                  if (safeEnd > flushedUpTo) {
-                    const toSend = filtered.substring(flushedUpTo, safeEnd);
-                    flushedUpTo = safeEnd;
-                    data.choices[0].delta.content = toSend;
-                    res.write(`data: ${JSON.stringify(data)}\n\n`);
-                  }
-                  return;
-                }
-              }
-              res.write(`data: ${JSON.stringify(data)}\n\n`);
-            } catch (e) {
-              res.write(line + '\n');
-            }
-          }
-        });
-      });
-      
-      response.data.on('end', () => res.end());
-      response.data.on('error', (err) => {
-        console.error('Stream error:', err);
-        res.end();
-      });
-    } else {
-      // Transform NIM response to OpenAI format with reasoning
-      const openaiResponse = {
-        id: `chatcmpl-${Date.now()}`,
-        object: 'chat.completion',
-        created: Math.floor(Date.now() / 1000),
-        model: model,
-        choices: response.data.choices.map(choice => {
-          let fullContent = choice.message?.content || '';
-
-          // 🛡️ Strip any text where the model broke character and wrote as the user
-          fullContent = stripUserBreakout(fullContent);
-          
-          if (SHOW_REASONING && choice.message?.reasoning_content) {
-            fullContent = '<think>\n' + choice.message.reasoning_content + '\n</think>\n\n' + fullContent;
-          }
-          
-          return {
-            index: choice.index,
-            message: {
-              role: choice.message.role,
-              content: fullContent
+            headers: { 
+                'Authorization': `Bearer ${NIM_API_KEY}`,
+                'Content-Type': 'application/json' 
             },
-            finish_reason: choice.finish_reason
-          };
-        }),
-        usage: response.data.usage || {
-          prompt_tokens: 0,
-          completion_tokens: 0,
-          total_tokens: 0
+            responseType: stream ? 'stream' : 'json'
+        });
+
+        if (stream) {
+            res.setHeader('Content-Type', 'text/event-stream');
+            response.data.pipe(res);
+        } else {
+            res.json(response.data);
         }
-      };
-      
-      res.json(openaiResponse);
+    } catch (err) {
+        console.error("Error:", err.message);
+        res.status(500).json({ error: "Proxy Error", detail: err.message });
     }
-    
-  } catch (error) {
-    console.error('Proxy error:', error.message);
-    
-    // Enhanced error messages
-    let errorMessage = error.message || 'Internal server error';
-    if (error.response?.status === 401) {
-      errorMessage = 'Invalid NVIDIA API key. Please check your NIM_API_KEY in environment variables.';
-    } else if (error.response?.status === 429) {
-      errorMessage = 'Rate limit exceeded. Please try again in a moment.';
-    } else if (error.response?.data?.detail) {
-      errorMessage = error.response.data.detail;
-    }
-    
-    res.status(error.response?.status || 500).json({
-      error: {
-        message: errorMessage,
-        type: 'invalid_request_error',
-        code: error.response?.status || 500
-      }
-    });
-  }
 });
 
-// Catch-all for unsupported endpoints
-app.all('*', (req, res) => {
-  res.status(404).json({
-    error: {
-      message: `Endpoint ${req.path} not found. Available endpoints: /health, /v1/models, /v1/chat/completions`,
-      type: 'invalid_request_error',
-      code: 404
-    }
-  });
-});
-
-app.listen(PORT, '0.0.0.0', () => {
-  console.log('═══════════════════════════════════════════════════════');
-  console.log('🚀 OpenAI → NVIDIA NIM Proxy (Janitor AI Optimized)');
-  console.log('═══════════════════════════════════════════════════════');
-  console.log(`📡 Server running on port ${PORT}`);
-  console.log(`🏥 Health check: http://localhost:${PORT}/health`);
-  console.log(`📋 Models list: http://localhost:${PORT}/v1/models`);
-  console.log('');
-  console.log('⚙️  Configuration:');
-  console.log(`   • Reasoning display: ${SHOW_REASONING ? '✅ ENABLED' : '❌ DISABLED'}`);
-  console.log(`   • Thinking mode: ${ENABLE_THINKING_MODE ? '✅ ENABLED' : '❌ DISABLED'}`);
-  console.log(`   • API key: ${NIM_API_KEY ? '✅ Configured' : '❌ Missing'}`);
-  console.log('');
-  console.log('🎯 Featured Models:');
-  console.log('   • Best Quality: gpt-4 → GLM-4.7');
-  console.log('   • Balanced: claude-sonnet → Llama Nemotron Super (49B)');
-  console.log('   • Fastest: gpt-3.5-turbo → Llama Nemotron Nano (8B)');
-  console.log('═══════════════════════════════════════════════════════');
-});
+app.listen(PORT, '0.0.0.0', () => console.log(`Proxy live on port ${PORT}`));

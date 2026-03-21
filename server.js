@@ -29,7 +29,7 @@ const SHOW_REASONING = process.env.SHOW_REASONING === 'true' || false;
 // 🔥 THINKING MODE TOGGLE
 const ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE === 'true' || false;
 
-// 🎯 YOUR ORIGINAL MODEL MAPPING (RESTORED)
+// 🎯 YOUR ORIGINAL MODEL MAPPING
 const MODEL_MAPPING = {
   'gpt-4': 'z-ai/glm4.7',
   'gpt-4-turbo': 'z-ai/glm4.7',
@@ -54,30 +54,6 @@ const RP_GUARD_INSTRUCTION = `You are ONLY the character described in the system
 - Do NOT continue the conversation by inventing what the user says or does next.
 - Stop your response immediately after your character's turn ends.
 - If you feel the scene needs a reaction from the user, end your response and wait.`;
-
-function stripUserBreakout(text) {
-  const lines = text.split('\n');
-  const cleaned = [];
-  let dropping = false;
-  const userLabels = [/^(User|Human|You|Me|Player)\s*[:：]/i, /^---+\s*$/, /^\*{0,3}\s*(User|Human|You|Me|Player)\s*\*{0,3}\s*[:：]/i];
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (userLabels.some(pattern => pattern.test(trimmed))) {
-      dropping = true;
-      continue;
-    }
-    if (dropping) {
-      if (trimmed === '') continue;
-      if (trimmed.startsWith('*')) dropping = false;
-      else continue;
-    }
-    cleaned.push(line);
-  }
-  const result = cleaned.join('\n');
-  const lastUserLabel = result.search(/\n(?:User|Human|You|Me|Player)\s*[:：]/i);
-  return lastUserLabel !== -1 ? result.substring(0, lastUserLabel).trimEnd() : result.trimEnd();
-}
 
 const THINKING_MODELS = [
   'z-ai/glm4.7',
@@ -118,6 +94,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       if (nimModel.includes('glm')) nimRequest.extra_body = { thinking: true };
     }
     
+    // 🚀 SPEED OPTIMIZED REQUEST
     const response = await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
       headers: { 'Authorization': `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' },
       responseType: stream ? 'stream' : 'json'
@@ -128,46 +105,15 @@ app.post('/v1/chat/completions', async (req, res) => {
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
       
-      let buffer = '';
-      let contentAccumulator = '';
-      let flushedUpTo = 0;
+      // 🚀 DIRECT PIPE: This is the speed fix. Pipes stream directly to Janitor.
+      response.data.pipe(res);
       
-      response.data.on('data', (chunk) => {
-        buffer += chunk.toString();
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        
-        lines.forEach(line => {
-          if (line.startsWith('data: ')) {
-            if (line.includes('[DONE]')) {
-              res.write(line + '\n\n');
-              return;
-            }
-            try {
-              const data = JSON.parse(line.slice(6));
-              const content = data.choices?.[0]?.delta?.content || '';
-              if (content) {
-                contentAccumulator += content;
-                const filtered = stripUserBreakout(contentAccumulator);
-                if (filtered.length > flushedUpTo) {
-                   data.choices[0].delta.content = filtered.substring(flushedUpTo);
-                   flushedUpTo = filtered.length;
-                   res.write(`data: ${JSON.stringify(data)}\n\n`);
-                }
-              }
-            } catch (e) { res.write(line + '\n'); }
-          }
-        });
-      });
-      response.data.on('end', () => res.end());
     } else {
-      const result = response.data;
-      if (result.choices?.[0]?.message) {
-        result.choices[0].message.content = stripUserBreakout(result.choices[0].message.content);
-      }
-      res.json(result);
+      // For non-streaming, we return the data as-is
+      res.json(response.data);
     }
   } catch (error) {
+    console.error("Proxy Error:", error.message);
     res.status(500).json({ error: { message: error.message } });
   }
 });

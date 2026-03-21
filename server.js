@@ -65,9 +65,15 @@ app.post('/v1/chat/completions', async (req, res) => {
       temperature: temperature || 0.7,
       max_tokens: max_tokens || 4096,
       stream: stream || false,
-      // 🎯 2026 GLM Standard: Explicitly disable/enable thinking via object
+      // 🎯 THE CRITICAL 2026 FIX:
+      // This object forces the model to stop the internal monologue.
       thinking: { 
         type: shouldThink ? "enabled" : "disabled" 
+      },
+      // Some NVIDIA endpoints still use the 2025 "extra_body" style
+      extra_body: {
+        enable_thinking: shouldThink,
+        clear_thinking: true // Ensures it doesn't "remember" old thoughts
       }
     };
 

@@ -2,6 +2,14 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const https = require('https');
+const http = require('http');
+
+// This keeps the connection to NVIDIA "warm" so it doesn't have to restart
+const axiosInstance = axios.create({
+  httpAgent: new http.Agent({ keepAlive: true }),
+  httpsAgent: new https.Agent({ keepAlive: true }),
+});
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -95,7 +103,7 @@ app.post('/v1/chat/completions', async (req, res) => {
     }
     
     // 🚀 SPEED OPTIMIZED REQUEST
-    const response = await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
+    const response = await axiosInstance.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
       headers: { 'Authorization': `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' },
       responseType: stream ? 'stream' : 'json'
     });

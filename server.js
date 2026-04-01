@@ -1,4 +1,4 @@
-// server.js - Updated with NVIDIA chat_template_kwargs (2026)
+// server.js - NVIDIA NIM Proxy (Optimized for Render 24/7 Uptime)
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -8,9 +8,18 @@ const http = require('http');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// 🧹 THE FIX #1: Aggressive Socket Cleanup (No more slowdowns)
 const axiosInstance = axios.create({
-  httpAgent: new http.Agent({ keepAlive: true }),
-  httpsAgent: new https.Agent({ keepAlive: true }),
+  httpAgent: new http.Agent({ 
+    keepAlive: true, 
+    maxSockets: 50,          // Limit max open connections
+    timeout: 60000           // Kill dead sockets after 60 seconds
+  }),
+  httpsAgent: new https.Agent({ 
+    keepAlive: true, 
+    maxSockets: 50, 
+    timeout: 60000 
+  }),
 });
 
 app.use((req, res, next) => {
@@ -31,27 +40,26 @@ const MODEL_MAPPING = {
   'gpt-4-reasoning': 'z-ai/glm5',   // 🧠 Thinking
 };
 
-const RP_GUARD = `You are the character described. No user dialogue. Stop when your turn ends.`;
+// Health endpoint for our ping
+app.get('/health', (req, res) => res.json({ status: 'I am awake, boss 🦁' }));
 
 app.post('/v1/chat/completions', async (req, res) => {
   try {
     const { model, messages, temperature, max_tokens, stream } = req.body;
     let nimModel = MODEL_MAPPING[model] || 'z-ai/glm4.7';
 
-    // 🧠 LOGIC: Set the thinking flags exactly like the NVIDIA snippet
     const shouldThink = model.includes('4o') || model.includes('reasoning');
 
     const nimRequest = {
       model: nimModel,
       messages,
-      temperature: temperature || 1, // Standardizing to your snippet
+      temperature: temperature || 1, 
       top_p: 1,
       max_tokens: max_tokens || 16384,
       stream: stream || false,
-      // 🚀 THE FIX: Passing the template args as raw JSON fields
       chat_template_kwargs: {
         "enable_thinking": shouldThink,
-        "clear_thinking": !shouldThink // clear_thinking: true when fast, false when thinking
+        "clear_thinking": !shouldThink 
       }
     };
 
@@ -71,4 +79,16 @@ app.post('/v1/chat/completions', async (req, res) => {
   }
 });
 
-app.listen(PORT, '0.0.0.0', () => console.log(`Running on ${PORT}`));
+// ⏰ THE FIX #2: The 14-Minute Anti-Sleep Ping
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Running on ${PORT}`);
+  
+  // Render automatically provides RENDER_EXTERNAL_URL for your app
+  const serverUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+  
+  setInterval(() => {
+    axios.get(`${serverUrl}/health`)
+      .then(() => console.log('Pinged self to prevent sleep ⚡'))
+      .catch((err) => console.log('Ping failed', err.message));
+  }, 14 * 60 * 1000); // Runs every 14 minutes
+});

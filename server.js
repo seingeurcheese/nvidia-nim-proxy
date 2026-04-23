@@ -36,8 +36,8 @@ const NIM_API_KEY = process.env.NIM_API_KEY;
 const MODEL_MAPPING = {
   'gpt-4': 'z-ai/glm4.7',           // ⚡ Fast
   'gpt-4o': 'z-ai/glm4.7',          // 🧠 Thinking
-  'gpt-4-turbo': 'z-ai/glm5',       // ⚡ Fast
-  'gpt-4-reasoning': 'z-ai/glm5',   // 🧠 Thinking
+  'gpt-4-turbo': 'z-ai/glm5.1',       // ⚡ Fast
+  'gpt-4-reasoning': 'z-ai/glm5.1',   // 🧠 Thinking
 };
 
 // Health endpoint for our ping

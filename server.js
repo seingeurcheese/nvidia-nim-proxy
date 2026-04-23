@@ -36,9 +36,14 @@ const NIM_API_KEY = process.env.NIM_API_KEY;
 const MODEL_MAPPING = {
   'gpt-4': 'z-ai/glm4.7',           // ⚡ Fast
   'gpt-4o': 'z-ai/glm4.7',          // 🧠 Thinking
-  'gpt-4-turbo': 'z-ai/glm5.1',       // ⚡ Fast
-  'gpt-4-reasoning': 'z-ai/glm5.1',   // 🧠 Thinking
+  'gpt-4-turbo': 'z-ai/glm5',       // ⚡ Fast
+  'gpt-4-reasoning': 'z-ai/glm5',   // 🧠 Thinking
+  
+  // 🔥 THE NEW GLM-5.1 ENDPOINTS:
+  'gpt-3.5-turbo': 'z-ai/glm-5.1',          // ⚡ Fast
+  'gpt-3.5-turbo-instruct': 'z-ai/glm-5.1', // 🧠 Thinking
 };
+
 
 // Health endpoint for our ping
 app.get('/health', (req, res) => res.json({ status: 'I am awake, boss 🦁' }));
@@ -48,7 +53,8 @@ app.post('/v1/chat/completions', async (req, res) => {
     const { model, messages, temperature, max_tokens, stream } = req.body;
     let nimModel = MODEL_MAPPING[model] || 'z-ai/glm4.7';
 
-    const shouldThink = model.includes('4o') || model.includes('reasoning');
+    const shouldThink = model.includes('4o') || model.includes('reasoning') || model.includes('instruct');
+    
 
     const nimRequest = {
       model: nimModel,

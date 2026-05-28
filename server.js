@@ -1,4 +1,4 @@
-// server.js - NVIDIA NIM Proxy (Logs version, original error handling)
+// server.js - NVIDIA NIM Proxy (Logs version, original error handling, unknown models default reasoning on)
 const fs = require('fs');
 const express = require('express');
 const cors = require('cors');
@@ -91,10 +91,19 @@ app.post('/v1/chat/completions', async (req, res) => {
   
   try {
     const { model, messages, temperature, max_tokens, stream } = req.body;
-    // 🔥 Fallback: use model name directly if not in mapping
+    
+    // Model fallback: mapped model → raw model → default
     let nimModel = MODEL_MAPPING[model] || model || 'z-ai/glm4.7';
 
-    const shouldThink = model.includes('4o') || model.includes('reasoning') || model.includes('instruct');
+    // Reasoning toggle: known models use substrings, unknown models default to true
+    let shouldThink;
+    if (model && MODEL_MAPPING[model] !== undefined) {
+      // Known mapping → use substring check
+      shouldThink = model.includes('4o') || model.includes('reasoning') || model.includes('instruct');
+    } else {
+      // Unknown model (or no mapping) → reasoning ON by default
+      shouldThink = true;
+    }
     
     const nimRequest = {
       model: nimModel,
@@ -125,7 +134,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       res.json(response.data);
     }
   } catch (error) {
-    // Rolled back to original simple 500
+    // Simple error handling as requested
     res.status(500).json({ error: error.message });
   }
 });

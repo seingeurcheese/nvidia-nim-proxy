@@ -49,7 +49,7 @@ app.get('/health', (req, res) => res.json({ status: 'I am awake, boss 🦁' }));
 app.post('/v1/chat/completions', async (req, res) => {
   try {
     const { model, messages, temperature, max_tokens, stream } = req.body;
-    let nimModel = MODEL_MAPPING[model] || 'z-ai/glm4.7';
+    let nimModel = MODEL_MAPPING[model] || model || 'z-ai/glm4.7';
 
     const shouldThink = model.includes('4o') || model.includes('reasoning') || model.includes('instruct');
     

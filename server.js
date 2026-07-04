@@ -40,8 +40,8 @@ const MODEL_MAPPING = {
   'gpt-4o': 'z-ai/glm4.7',
   'gpt-4-turbo': 'z-ai/glm5',
   'gpt-4-reasoning': 'z-ai/glm5',
-  'gpt-3.5-turbo': 'z-ai/glm-5.1',
-  'gpt-3.5-turbo-instruct': 'z-ai/glm-5.1',
+  'gpt-3.5-turbo': 'z-ai/glm-5.2',
+  'gpt-3.5-turbo-instruct': 'z-ai/glm-5.2',
 };
 
 // Health endpoint
